@@ -17,7 +17,9 @@ use tokio_stream::{Stream, StreamExt};
 use self::util::set_rlimit_nofile;
 use self::{
     acceptor::Socks5Acceptor,
+    config::AppConfig,
     error::{Error, Result},
+    logger::init as init_logger,
     listener::Socks5Listener,
     target::{Socks5Host, Socks5Target},
     util::{IntoResult, PutSocks5Addr, Split},
@@ -26,8 +28,10 @@ use self::{
 pub type Socks5Stream = TcpStream;
 
 mod acceptor;
+mod config;
 mod error;
 mod listener;
+mod logger;
 mod target;
 mod tcp;
 mod udp;
@@ -50,25 +54,31 @@ mod util;
 )]
 struct Cli {
     #[arg(
-        short = 'l',
-        long = "listen",
-        value_name = "HOST:PORT",
-        help = "Listen address",
+        short = 'c',
+        long = "config",
+        value_name = "FILE",
+        help = "Path to TOML configuration file",
         required = true
     )]
-    listen: SocketAddr,
+    config: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let mut listener = Socks5Listener::listen(cli.listen).await?;
-    println!("Listening on: {}\n", cli.listen);
+    let config = AppConfig::from_file(&cli.config)?;
+    init_logger(config.log.clone())?;
+    let auth = config.auth.to_state();
+    let access = config.access.to_state();
+    let mut listener = Socks5Listener::listen(config.listen).await?;
+    println!("Listening on: {}\n", config.listen);
 
     #[cfg(target_family = "unix")]
     let _ = set_rlimit_nofile(4096);
 
-    while let Some((acceptor, client)) = listener.next().await.transpose()? {
+    while let Some((mut acceptor, client)) = listener.next().await.transpose()? {
+        acceptor.auth = auth.clone();
+        acceptor.access = access.clone();
         tokio::spawn(async move {
             match acceptor.accept().await {
                 Ok(_) => println!("{client} =! Closed."),

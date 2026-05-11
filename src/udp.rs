@@ -1,8 +1,12 @@
 use super::*;
+use crate::config::AccessState;
+use crate::logger::{log_access, log_event, log_failure};
 
 pub struct Socks5UdpClient {
     pub udp_socket: UdpSocket,
     pub client_addr: SocketAddr,
+    pub access: Option<AccessState>,
+    pub username: Option<String>,
 }
 
 pub struct Socks5UdpForwarder {
@@ -13,10 +17,17 @@ pub struct Socks5UdpForwarder {
 }
 
 impl Socks5UdpClient {
-    pub fn new(udp_socket: UdpSocket, client_addr: SocketAddr) -> Self {
+    pub fn new(
+        udp_socket: UdpSocket,
+        client_addr: SocketAddr,
+        access: Option<AccessState>,
+        username: Option<String>,
+    ) -> Self {
         Self {
             udp_socket,
             client_addr,
+            access,
+            username,
         }
     }
 }
@@ -86,6 +97,8 @@ impl Socks5UdpForwarder {
     pub async fn forward_udp(mut self, client: Socks5UdpClient) -> Result<()> {
         let udp_socket = client.udp_socket;
         let client_addr = client.client_addr;
+        let access = client.access;
+        let username = client.username;
         let local_addr = udp_socket.local_addr()?;
 
         if client_addr.port() != 0 {
@@ -113,7 +126,8 @@ impl Socks5UdpForwarder {
                 }
                 let offset = Socks5Target::target_len(&buf[3..])?;
                 let target = Socks5Target::try_from(&buf[3..3 + offset])?;
-                if self.targets.insert(target.clone()) {
+                let first_seen = self.targets.insert(target.clone());
+                if first_seen {
                     println!("{from} -> {target} (UDP)");
                 }
 
@@ -127,6 +141,27 @@ impl Socks5UdpForwarder {
                     Socks5Host::Domain(x) => self.lookup_host(&x).await,
                 };
                 if let Some(ip) = ip {
+                    if access.as_ref().map(|x| x.is_denied(ip)).unwrap_or(false) {
+                        log_failure(
+                            "access_denied",
+                            username.as_deref(),
+                            &from.to_string(),
+                            &from.ip().to_string(),
+                            Some(&format!("{ip}:{}", target.1)),
+                            "blocked_target_ip",
+                        );
+                        len = client_receiver.recv(&mut buf).await?;
+                        continue;
+                    }
+                    if first_seen {
+                        log_access(
+                            "udp",
+                            username.as_deref(),
+                            &from.to_string(),
+                            &from.ip().to_string(),
+                            &format!("{ip}:{}", target.1),
+                        );
+                    }
                     use ErrorKind::*;
                     upstream_sender
                         .send_to(data, (ip, target.1))
@@ -183,6 +218,9 @@ impl Socks5Acceptor {
         local_addr = udp_socket.local_addr()?;
 
         let mut client_addr = self.stream.peer_addr()?;
+        let client_addr_str = client_addr.to_string();
+        let client_ip = client_addr.ip().to_string();
+        let target_str = target.to_string();
         println!("{client_addr} => {local_addr} (UDP)");
         client_addr.set_port(target.1);
         self.connected(local_addr).await?;
@@ -194,7 +232,12 @@ impl Socks5Acceptor {
                 return Err(e);
             }
         };
-        let udp_client = Socks5UdpClient::new(udp_socket, client_addr);
+        let udp_client = Socks5UdpClient::new(
+            udp_socket,
+            client_addr,
+            self.access.clone(),
+            self.username.clone(),
+        );
         let forward_udp = forwarder.forward_udp(udp_client);
 
         let done = async {
@@ -202,13 +245,21 @@ impl Socks5Acceptor {
             Ok(())
         };
 
-        tokio::select! {
+        let result = tokio::select! {
             r1 = forward_udp => {
                 r1
             },
             r2 = done => {
                 r2
             },
-        }
+        };
+        log_event(
+            "connection_closed",
+            self.username.as_deref(),
+            &client_addr_str,
+            &client_ip,
+            Some(&target_str),
+        );
+        result
     }
 }

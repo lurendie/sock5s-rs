@@ -1,0 +1,17 @@
+listen = "0.0.0.0:1080"
+
+# 留空 users 即关闭鉴权（NO AUTH）
+[auth]
+users = [
+  { username = "admin", password = "change-me" }
+]
+
+[access]
+mode = "blacklist" #
+ips = ["127.0.0.1", "10.0.0.5"]
+cidrs = ["192.168.0.0/16", "172.16.10.0/24"]
+
+[log]
+dir = "logs"
+retention_days = 7
+max_file_size_mb = 100

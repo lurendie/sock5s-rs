@@ -1,29 +1,144 @@
 use super::*;
+use crate::config::{AccessState, AuthState};
+use crate::logger::{log_event, log_failure};
 
 pub struct Socks5Acceptor {
     pub buf: Vec<u8>,
     pub stream: TcpStream,
+    pub auth: Option<AuthState>,
+    pub access: Option<AccessState>,
+    pub username: Option<String>,
 }
 
 impl Socks5Acceptor {
     pub async fn authenticate(&mut self) -> Result<()> {
+        let client_addr = self.peer_addr();
+        let client_addr_str = client_addr.to_string();
+        let client_ip = client_addr.ip().to_string();
         self.buf.resize(2, 0);
         self.stream.read_exact(&mut self.buf).await?;
 
         if self.buf[0] != 5 {
+            log_failure(
+                "auth_failed",
+                self.username.as_deref(),
+                &client_addr_str,
+                &client_ip,
+                None,
+                "not_socks5_request",
+            );
             return Err("Not socks5 request!".into());
         }
 
         self.buf.resize(2 + self.buf[1] as usize, 0);
         self.stream.read_exact(&mut self.buf[2..]).await?;
 
-        if !self.buf[2..].contains(&0) {
-            self.stream.write_all(b"\x05\xff").await?;
-            return Err("No supported authentication method!".into());
+        match &self.auth {
+            Some(_) => {
+                if !self.buf[2..].contains(&0x02) {
+                    self.stream.write_all(b"\x05\xff").await?;
+                    log_failure(
+                        "auth_failed",
+                        self.username.as_deref(),
+                        &client_addr_str,
+                        &client_ip,
+                        None,
+                        "no_supported_auth_method",
+                    );
+                    return Err("No supported authentication method!".into());
+                }
+                self.stream.write_all(b"\x05\x02").await?;
+                self.authenticate_userpass().await?;
+            }
+            None => {
+                if !self.buf[2..].contains(&0x00) {
+                    self.stream.write_all(b"\x05\xff").await?;
+                    log_failure(
+                        "auth_failed",
+                        self.username.as_deref(),
+                        &client_addr_str,
+                        &client_ip,
+                        None,
+                        "no_supported_auth_method",
+                    );
+                    return Err("No supported authentication method!".into());
+                }
+                self.stream.write_all(b"\x05\x00").await?;
+                log_event(
+                    "auth_succeeded",
+                    self.username.as_deref(),
+                    &client_addr_str,
+                    &client_ip,
+                    None,
+                );
+            }
+        }
+        Ok(())
+    }
+
+    async fn authenticate_userpass(&mut self) -> Result<()> {
+        let client_addr = self.peer_addr();
+        let client_addr_str = client_addr.to_string();
+        let client_ip = client_addr.ip().to_string();
+        self.buf.resize(2, 0);
+        self.stream.read_exact(&mut self.buf).await?;
+        if self.buf[0] != 0x01 {
+            self.stream.write_all(&[0x01, 0x01]).await?;
+            log_failure(
+                "auth_failed",
+                self.username.as_deref(),
+                &client_addr_str,
+                &client_ip,
+                None,
+                "invalid_userpass_auth_version",
+            );
+            return Err("Invalid username/password auth version!".into());
         }
 
-        self.stream.write_all(b"\x05\x00").await?;
-        Ok(())
+        let ulen = self.buf[1] as usize;
+        self.buf.resize(2 + ulen + 1, 0);
+        self.stream
+            .read_exact(&mut self.buf[2..(2 + ulen + 1)])
+            .await?;
+        let plen = self.buf[2 + ulen] as usize;
+        self.buf.resize(2 + ulen + 1 + plen, 0);
+        self.stream
+            .read_exact(&mut self.buf[(2 + ulen + 1)..])
+            .await?;
+
+        let username = std::str::from_utf8(&self.buf[2..2 + ulen])
+            .map_err(|_| Error::from("Invalid UTF-8 username!"))?;
+        let password = std::str::from_utf8(&self.buf[(2 + ulen + 1)..(2 + ulen + 1 + plen)])
+            .map_err(|_| Error::from("Invalid UTF-8 password!"))?;
+
+        let ok = self
+            .auth
+            .as_ref()
+            .map(|x| x.verify(username, password))
+            .unwrap_or(false);
+        if ok {
+            self.username = Some(username.to_owned());
+            self.stream.write_all(&[0x01, 0x00]).await?;
+            log_event(
+                "auth_succeeded",
+                self.username.as_deref(),
+                &client_addr_str,
+                &client_ip,
+                None,
+            );
+            Ok(())
+        } else {
+            self.stream.write_all(&[0x01, 0x01]).await?;
+            log_failure(
+                "auth_failed",
+                Some(username),
+                &client_addr_str,
+                &client_ip,
+                None,
+                "invalid_username_or_password",
+            );
+            Err("Username/password authentication failed!".into())
+        }
     }
 
     pub async fn accept(mut self) -> Result<()> {
@@ -84,9 +199,9 @@ impl Socks5Acceptor {
         //   0x07 Command not supported
         //   0x08 Address type not supported
         //   0x09 to 0xff unassigned
-        self.stream
-            .write_all(&[&[0x05, 0x01, resp], &self.buf[3..]].concat())
-            .await?;
+        let mut reply = vec![0x05, resp, 0x00];
+        reply.extend_from_slice(&self.buf[3..]);
+        self.stream.write_all(&reply).await?;
         Ok(())
     }
 
@@ -100,6 +215,9 @@ impl From<TcpStream> for Socks5Acceptor {
         Self {
             stream,
             buf: Vec::with_capacity(64),
+            auth: None,
+            access: None,
+            username: None,
         }
     }
 }
