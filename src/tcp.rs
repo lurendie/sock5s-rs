@@ -53,7 +53,18 @@ impl Socks5Acceptor {
         let client_addr_str = client_addr.to_string();
         let client_ip = client_addr.ip().to_string();
         let target_str = target.to_string();
-        eprintln!("{client_addr} -> {target}");
+        if matches!(target.0, Socks5Host::Domain(_)) && !self.allow_domains() {
+            log_failure(
+                "connect_failed",
+                self.username.as_deref(),
+                &client_addr_str,
+                &client_ip,
+                Some(&target_str),
+                "domain_targets_not_supported",
+            );
+            self.closed(8).await?;
+            return Err("Domain targets are not supported!".into());
+        }
         let connector = match Socks5TcpConnector::connect(&target, self.access.as_ref()).await {
             Ok(connector) => connector,
             Err(err) => {

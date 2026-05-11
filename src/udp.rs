@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashMap;
 use crate::config::AccessState;
 use crate::logger::{log_access, log_event, log_failure};
 
@@ -12,6 +13,7 @@ pub struct Socks5UdpClient {
 pub struct Socks5UdpForwarder {
     ipv4_only: bool,
     udp_socket: Option<UdpSocket>,
+    allow_domains: bool,
     hosts: Option<HashMap<String, IpAddr>>,
     targets: HashSet<Socks5Target>,
 }
@@ -33,7 +35,7 @@ impl Socks5UdpClient {
 }
 
 impl Socks5UdpForwarder {
-    pub fn bind() -> Result<Self> {
+    pub fn bind(allow_domains: bool) -> Result<Self> {
         let mut ipv4_only = true;
 
         let udp_socket = if let Ok(socket) = (|| {
@@ -55,6 +57,7 @@ impl Socks5UdpForwarder {
         Ok(Self {
             ipv4_only,
             udp_socket,
+            allow_domains,
             hosts: None,
             targets: HashSet::new(),
         })
@@ -99,7 +102,6 @@ impl Socks5UdpForwarder {
         let client_addr = client.client_addr;
         let access = client.access;
         let username = client.username;
-        let local_addr = udp_socket.local_addr()?;
 
         if client_addr.port() != 0 {
             udp_socket.connect(client_addr).await?;
@@ -113,7 +115,6 @@ impl Socks5UdpForwarder {
             }
             udp_socket.connect(from).await?;
         }
-        println!("{from} <> {local_addr} (UDP)");
 
         let (client_receiver, client_sender) = &mut udp_socket.split();
         let (upstream_receiver, upstream_sender) =
@@ -127,8 +128,17 @@ impl Socks5UdpForwarder {
                 let offset = Socks5Target::target_len(&buf[3..])?;
                 let target = Socks5Target::try_from(&buf[3..3 + offset])?;
                 let first_seen = self.targets.insert(target.clone());
-                if first_seen {
-                    println!("{from} -> {target} (UDP)");
+                if matches!(target.0, Socks5Host::Domain(_)) && !self.allow_domains {
+                    log_failure(
+                        "connect_failed",
+                        username.as_deref(),
+                        &from.to_string(),
+                        &from.ip().to_string(),
+                        Some(&target.to_string()),
+                        "domain_targets_not_supported",
+                    );
+                    len = client_receiver.recv(&mut buf).await?;
+                    continue;
                 }
 
                 let data = &buf[3 + offset..len];
@@ -221,11 +231,10 @@ impl Socks5Acceptor {
         let client_addr_str = client_addr.to_string();
         let client_ip = client_addr.ip().to_string();
         let target_str = target.to_string();
-        println!("{client_addr} => {local_addr} (UDP)");
         client_addr.set_port(target.1);
         self.connected(local_addr).await?;
 
-        let forwarder = match Socks5UdpForwarder::bind() {
+        let forwarder = match Socks5UdpForwarder::bind(self.allow_domains()) {
             Ok(x) => x,
             Err(e) => {
                 self.closed(1).await?;

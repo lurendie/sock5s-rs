@@ -11,11 +11,11 @@
 - ✅ `CONNECT` 命令
   - ✅ IPv4
   - ✅ IPv6
-  - ✅ 域名
+  - ✅ 域名（可配置开关）
 - ✅ `UDP ASSOCIATE` 命令
   - ✅ IPv4
   - ✅ IPv6
-  - ✅ 域名
+  - ✅ 域名（可配置开关）
 - ✅ 双栈支持（IPv4 / IPv6）
 - ✅ 基于 Tokio 的异步实现
 - ✅ 跨平台（Linux / macOS / Windows）
@@ -36,6 +36,7 @@ users = [
 
 [access]
 mode = "blacklist"
+allow_domains = false
 ips = ["127.0.0.1", "10.0.0.5"]
 cidrs = ["192.168.0.0/16", "172.16.10.0/24"]
 
@@ -52,10 +53,12 @@ max_file_size_mb = 100
 - 留空时，使用无认证模式（NO AUTH）。
 - 非空时，启用用户名密码认证（RFC 1929），客户端需提供有效账号密码。
 - `access.mode`：访问控制模式，支持 `blacklist` 和 `whitelist`。
+- `access.allow_domains`：是否允许转发域名目标，默认 `false`。
 - `access.ips`：目标 IP 列表。
 - `access.cidrs`：目标网段列表，支持 CIDR。
 - 当 `mode = "blacklist"` 时，命中的 IP/网段会被拒绝。
 - 当 `mode = "whitelist"` 时，只有命中的 IP/网段允许访问，其余全部拒绝。
+- 当 `allow_domains = false` 时，客户端只能请求目标 IP，域名目标会被直接拒绝。
 - `log.dir`：日志目录。
 - `log.retention_days`：保留最近多少天日志，默认 `7`。
 - `log.max_file_size_mb`：单个日志文件大小上限，默认 `100` MB；超过后自动新建下一个文件。

@@ -44,6 +44,8 @@ pub struct AccessConfig {
     #[serde(default)]
     pub mode: AccessMode,
     #[serde(default)]
+    pub allow_domains: bool,
+    #[serde(default)]
     pub ips: Vec<IpAddr>,
     #[serde(default)]
     pub cidrs: Vec<IpNet>,
@@ -65,6 +67,7 @@ pub struct AuthState {
 #[derive(Debug, Clone)]
 pub struct AccessState {
     mode: AccessMode,
+    allow_domains: bool,
     ips: HashSet<IpAddr>,
     cidrs: Vec<IpNet>,
 }
@@ -117,6 +120,7 @@ impl AccessConfig {
 
         Some(AccessState {
             mode: self.mode,
+            allow_domains: self.allow_domains,
             ips: self.ips.iter().copied().collect(),
             cidrs: self.cidrs.clone(),
         })
@@ -124,6 +128,10 @@ impl AccessConfig {
 }
 
 impl AccessState {
+    pub fn allow_domains(&self) -> bool {
+        self.allow_domains
+    }
+
     pub fn is_denied(&self, ip: IpAddr) -> bool {
         let matched = self.ips.contains(&ip) || self.cidrs.iter().any(|net| net.contains(&ip));
         match self.mode {

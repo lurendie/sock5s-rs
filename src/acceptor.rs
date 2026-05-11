@@ -11,6 +11,13 @@ pub struct Socks5Acceptor {
 }
 
 impl Socks5Acceptor {
+    pub fn allow_domains(&self) -> bool {
+        self.access
+            .as_ref()
+            .map(|x| x.allow_domains())
+            .unwrap_or(false)
+    }
+
     pub async fn authenticate(&mut self) -> Result<()> {
         let client_addr = self.peer_addr();
         let client_addr_str = client_addr.to_string();

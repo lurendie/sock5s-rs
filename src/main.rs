@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::fmt::{self, Display, Formatter};
 use std::io::{ErrorKind, IoSlice};
@@ -19,7 +19,7 @@ use self::{
     acceptor::Socks5Acceptor,
     config::AppConfig,
     error::{Error, Result},
-    logger::init as init_logger,
+    logger::{init as init_logger, log_event, log_failure},
     listener::Socks5Listener,
     target::{Socks5Host, Socks5Target},
     util::{IntoResult, PutSocks5Addr, Split},
@@ -71,7 +71,13 @@ async fn main() -> Result<()> {
     let auth = config.auth.to_state();
     let access = config.access.to_state();
     let mut listener = Socks5Listener::listen(config.listen).await?;
-    println!("Listening on: {}\n", config.listen);
+    log_event(
+        "server_started",
+        None,
+        &config.listen.to_string(),
+        &config.listen.ip().to_string(),
+        None,
+    );
 
     #[cfg(target_family = "unix")]
     let _ = set_rlimit_nofile(4096);
@@ -80,9 +86,15 @@ async fn main() -> Result<()> {
         acceptor.auth = auth.clone();
         acceptor.access = access.clone();
         tokio::spawn(async move {
-            match acceptor.accept().await {
-                Ok(_) => println!("{client} =! Closed."),
-                Err(e) => println!("{client} =! Error: {e}"),
+            if let Err(e) = acceptor.accept().await {
+                log_failure(
+                    "session_error",
+                    None,
+                    &client.to_string(),
+                    &client.ip().to_string(),
+                    None,
+                    &e.to_string(),
+                );
             }
         });
     }

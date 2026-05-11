@@ -33,10 +33,8 @@ pub fn init(config: LogConfig) -> Result<()> {
 }
 
 pub fn log_access(protocol: &str, username: Option<&str>, client_addr: &str, client_ip: &str, target: &str) {
-    if let Some(logger) = LOGGER.get()
-        && let Err(err) = logger.log_access(protocol, username, client_addr, client_ip, target)
-    {
-        eprintln!("log write failed: {err}");
+    if let Some(logger) = LOGGER.get() {
+        let _ = logger.log_access(protocol, username, client_addr, client_ip, target);
     }
 }
 
@@ -48,10 +46,8 @@ pub fn log_failure(
     target: Option<&str>,
     reason: &str,
 ) {
-    if let Some(logger) = LOGGER.get()
-        && let Err(err) = logger.log_failure(event, username, client_addr, client_ip, target, reason)
-    {
-        eprintln!("log write failed: {err}");
+    if let Some(logger) = LOGGER.get() {
+        let _ = logger.log_failure(event, username, client_addr, client_ip, target, reason);
     }
 }
 
@@ -62,10 +58,8 @@ pub fn log_event(
     client_ip: &str,
     target: Option<&str>,
 ) {
-    if let Some(logger) = LOGGER.get()
-        && let Err(err) = logger.log_event(event, username, client_addr, client_ip, target)
-    {
-        eprintln!("log write failed: {err}");
+    if let Some(logger) = LOGGER.get() {
+        let _ = logger.log_event(event, username, client_addr, client_ip, target);
     }
 }
 
