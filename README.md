@@ -94,8 +94,11 @@ Options:
 
 本项目基于 [MIT license] 发布。
 
-[MIT license]: https://github.com/nanpuyue/sock5s/blob/main/LICENSE
+[MIT license]: https://github.com/lurendie/sock5s-rs/blob/main/LICENSE
 
 ## 项目主页
 
+[https://github.com/lurendie/sock5s-rs](https://github.com/lurendie/sock5s-rs)
+
+# 鸣谢
 [https://github.com/nanpuyue/sock5s](https://github.com/nanpuyue/sock5s)
