@@ -47,10 +47,6 @@ pub struct AccessConfig {
     pub ips: Vec<IpAddr>,
     #[serde(default)]
     pub cidrs: Vec<IpNet>,
-    #[serde(default)]
-    pub deny_ips: Vec<IpAddr>,
-    #[serde(default)]
-    pub deny_cidrs: Vec<IpNet>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
@@ -115,22 +111,14 @@ impl AuthState {
 
 impl AccessConfig {
     pub fn to_state(&self) -> Option<AccessState> {
-        let mut ips = self.ips.clone();
-        let mut cidrs = self.cidrs.clone();
-
-        if ips.is_empty() && cidrs.is_empty() {
-            ips = self.deny_ips.clone();
-            cidrs = self.deny_cidrs.clone();
-        }
-
-        if ips.is_empty() && cidrs.is_empty() {
+        if self.ips.is_empty() && self.cidrs.is_empty() {
             return None;
         }
 
         Some(AccessState {
             mode: self.mode,
-            ips: ips.iter().copied().collect(),
-            cidrs,
+            ips: self.ips.iter().copied().collect(),
+            cidrs: self.cidrs.clone(),
         })
     }
 }

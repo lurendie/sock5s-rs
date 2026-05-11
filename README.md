@@ -56,7 +56,6 @@ max_file_size_mb = 100
 - `access.cidrs`：目标网段列表，支持 CIDR。
 - 当 `mode = "blacklist"` 时，命中的 IP/网段会被拒绝。
 - 当 `mode = "whitelist"` 时，只有命中的 IP/网段允许访问，其余全部拒绝。
-- 兼容旧写法 `deny_ips` / `deny_cidrs`，未配置 `ips` / `cidrs` 时会自动沿用。
 - `log.dir`：日志目录。
 - `log.retention_days`：保留最近多少天日志，默认 `7`。
 - `log.max_file_size_mb`：单个日志文件大小上限，默认 `100` MB；超过后自动新建下一个文件。
