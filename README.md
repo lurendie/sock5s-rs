@@ -82,6 +82,21 @@ max_file_size_mb = 100
 sock5s --config ./config.toml
 ```
 
+桌面 UI：
+
+```bash
+cargo run --bin ui
+```
+
+UI 功能包括：
+
+- 编辑并保存代理配置文件
+- 一键导出带时间戳的配置快照
+- 启动 / 停止 SOCKS5 服务
+- 切换目标访问白名单 / 黑名单模式
+- 控制是否允许域名目标转发
+- 自动刷新并查看最近代理日志
+
 命令帮助：
 
 ```text

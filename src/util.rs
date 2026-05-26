@@ -30,6 +30,7 @@ pub trait Split {
         Self: Sized;
 }
 
+#[allow(async_fn_in_trait)]
 pub trait Vectored {
     async fn send_vectored(&self, bufs: &[IoSlice<'_>]) -> io::Result<usize>;
 }

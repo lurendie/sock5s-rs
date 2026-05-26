@@ -1,12 +1,12 @@
 use ipnet::IpNet;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
 use crate::error::Result;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppConfig {
     pub listen: SocketAddr,
     #[serde(default)]
@@ -17,19 +17,19 @@ pub struct AppConfig {
     pub log: LogConfig,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct AuthConfig {
     #[serde(default)]
     pub users: Vec<UserEntry>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct UserEntry {
     pub username: String,
     pub password: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LogConfig {
     #[serde(default = "default_log_dir")]
     pub dir: PathBuf,
@@ -39,7 +39,7 @@ pub struct LogConfig {
     pub max_file_size_mb: u64,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct AccessConfig {
     #[serde(default)]
     pub mode: AccessMode,
@@ -51,7 +51,7 @@ pub struct AccessConfig {
     pub cidrs: Vec<IpNet>,
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AccessMode {
     #[default]
@@ -90,6 +90,12 @@ impl AppConfig {
         let config: Self = toml::from_str(&content)?;
         Ok(config)
     }
+
+    pub fn save_to_file(&self, path: &str) -> Result<()> {
+        let content = toml::to_string_pretty(self)?;
+        std::fs::write(path, content)?;
+        Ok(())
+    }
 }
 
 impl AuthConfig {
@@ -114,7 +120,11 @@ impl AuthState {
 
 impl AccessConfig {
     pub fn to_state(&self) -> Option<AccessState> {
-        if self.ips.is_empty() && self.cidrs.is_empty() {
+        if self.ips.is_empty()
+            && self.cidrs.is_empty()
+            && !self.allow_domains
+            && self.mode == AccessMode::Blacklist
+        {
             return None;
         }
 

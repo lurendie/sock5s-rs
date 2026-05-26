@@ -40,3 +40,4 @@ impl From<&str> for Error {
 
 impl IntoError for std::io::Error {}
 impl IntoError for toml::de::Error {}
+impl IntoError for toml::ser::Error {}

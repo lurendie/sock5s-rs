@@ -1,0 +1,14 @@
+[application]
+name = "sock5s Control Center"
+default_platform = "desktop"
+out_dir = "dist"
+
+[bundle]
+identifier = "com.lurendie.sock5s"
+publisher = "lurendie"
+copyright = "Copyright (c) 2026 lurendie"
+category = "Utility"
+short_description = "Desktop control center for the sock5s proxy service."
+long_description = """
+A Dioxus desktop UI for editing sock5s configuration, starting and stopping the SOCKS5 proxy service, and viewing recent proxy logs.
+"""

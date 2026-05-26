@@ -26,6 +26,8 @@ include = [
 [dependencies]
 clap = { version="4.5.54", features = ["derive"] }
 chrono = { version = "0.4.42", default-features = false, features = ["clock"] }
+dioxus = { version = "0.6.3", features = ["desktop"] }
+dioxus-desktop = "0.6.3"
 ipnet = { version = "2.11.0", features = ["serde"] }
 indoc = "2.0.7"
 libc = "0.2.180"
