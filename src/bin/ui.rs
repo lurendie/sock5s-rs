@@ -11,6 +11,7 @@ use std::time::Duration;
 use chrono::Local;
 use dioxus::prelude::*;
 use dioxus::LaunchBuilder;
+use dioxus_desktop::tao::dpi::LogicalSize;
 use dioxus_desktop::tao::window::Icon;
 use dioxus_desktop::{Config as DesktopConfig, WindowBuilder};
 use serde::{Deserialize, Serialize};
@@ -485,7 +486,8 @@ fn main() {
     let mut config = DesktopConfig::new().with_window(
         WindowBuilder::new()
             .with_title("sock5s 控制中心")
-            .with_resizable(true),
+            .with_inner_size(LogicalSize::new(1360.0, 900.0))
+            .with_resizable(false),
     );
     if let Ok(icon) = build_window_icon() {
         config = config.with_icon(icon);
