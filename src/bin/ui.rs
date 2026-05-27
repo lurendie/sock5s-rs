@@ -12,10 +12,20 @@ use chrono::Local;
 use dioxus::prelude::*;
 use dioxus::LaunchBuilder;
 use dioxus_desktop::tao::dpi::LogicalSize;
+use dioxus_desktop::tao::event::Event;
 use dioxus_desktop::tao::window::Icon;
-use dioxus_desktop::{Config as DesktopConfig, WindowBuilder};
-use serde::{Deserialize, Serialize};
-use sock5s::config::{AccessConfig, AccessMode, AppConfig, AuthConfig, LogConfig, UserEntry};
+use dioxus_desktop::trayicon::{
+    self,
+    menu::{Menu, MenuItem},
+    MouseButton, MouseButtonState, TrayIconEvent,
+};
+use dioxus_desktop::{
+    use_tray_icon_event_handler, use_tray_menu_event_handler, use_window, Config as DesktopConfig,
+    WindowBuilder, WindowCloseBehaviour, WindowEvent,
+};
+use sock5s::config::{
+    AccessConfig, AccessMode, AppConfig, AuthConfig, LogConfig, UserEntry, DEFAULT_CONFIG_PATH,
+};
 use sock5s::run_server_from_path;
 use tokio::sync::watch;
 
@@ -23,7 +33,7 @@ const APP_CSS: &str = r#"
 body {
     margin: 0;
     font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
-    background: #e9edf2;
+    background: #f2f4f7;
     color: #1f2937;
 }
 
@@ -41,30 +51,42 @@ body {
 
 .toolbar, .panel, .nav {
     background: #ffffff;
-    border: 1px solid #cfd6df;
+    border: 1px solid #d5dbe3;
     border-radius: 0;
     box-shadow: none;
 }
 
 .toolbar {
-    padding: 10px 14px;
+    padding: 12px 16px;
     display: flex;
     justify-content: space-between;
-    gap: 12px;
+    gap: 16px;
     align-items: center;
+    background: linear-gradient(180deg, #1f3550, #182b42);
+    border-color: #182b42;
 }
 
 .toolbar-title {
     margin: 0;
-    font-size: 15px;
-    font-weight: 600;
-    color: #1b2a3a;
+    font-size: 16px;
+    font-weight: 700;
+    color: #f8fbff;
 }
 
-.toolbar-note {
-    margin: 2px 0 0;
-    color: #667281;
-    font-size: 12px;
+.toolbar-meta {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+    flex-wrap: wrap;
+}
+
+.toolbar-badge {
+    border: 1px solid rgba(184, 202, 223, 0.35);
+    background: rgba(255, 255, 255, 0.06);
+    color: #dfe9f5;
+    padding: 4px 10px;
+    font-size: 11px;
+    letter-spacing: 0.02em;
 }
 
 .toolbar-status {
@@ -75,11 +97,11 @@ body {
 }
 
 .status-chip {
-    border: 1px solid #cfd6df;
-    background: #f4f6f8;
-    color: #32475b;
+    border: 1px solid rgba(196, 211, 229, 0.28);
+    background: rgba(255, 255, 255, 0.08);
+    color: #edf4fb;
     border-radius: 999px;
-    padding: 4px 10px;
+    padding: 5px 11px;
     font-size: 12px;
 }
 
@@ -95,27 +117,22 @@ body {
 }
 
 .nav {
-    padding: 10px;
+    padding: 12px;
     display: grid;
     gap: 8px;
     position: sticky;
     top: 10px;
-    background: #f5f7fa;
+    background: linear-gradient(180deg, #243447, #1b2735);
+    border-color: #1b2735;
 }
 
 .nav-title {
     margin: 0;
     font-size: 12px;
     font-weight: 600;
-    color: #304254;
+    color: #d9e5f2;
     text-transform: uppercase;
-}
-
-.nav-note {
-    margin: 0;
-    color: #6b7785;
-    font-size: 11px;
-    line-height: 1.45;
+    letter-spacing: 0.06em;
 }
 
 .nav-list {
@@ -124,9 +141,9 @@ body {
 }
 
 .nav-item {
-    border: 1px solid #cfd6df;
-    background: #ffffff;
-    color: #334155;
+    border: 1px solid #314255;
+    background: #223140;
+    color: #c9d7e6;
     border-radius: 0;
     padding: 10px 10px;
     display: grid;
@@ -136,9 +153,9 @@ body {
 }
 
 .nav-item.active {
-    background: #dcecff;
-    border-color: #74a7e7;
-    color: #0d4f9c;
+    background: #f6fbff;
+    border-color: #8ab4e6;
+    color: #123f74;
 }
 
 .nav-item strong {
@@ -152,7 +169,7 @@ body {
 }
 
 .nav-footer {
-    border-top: 1px solid #e2e8f0;
+    border-top: 1px solid #314255;
     padding-top: 10px;
     display: grid;
     gap: 5px;
@@ -160,11 +177,12 @@ body {
 
 .nav-footer span {
     font-size: 12px;
-    color: #607082;
+    color: #a9bbcf;
 }
 
 .panel {
-    padding: 12px;
+    padding: 14px;
+    background: #fcfdff;
 }
 
 .panel-header {
@@ -179,15 +197,9 @@ body {
 
 .panel-title {
     margin: 0 0 4px;
-    font-size: 18px;
-    font-weight: 600;
-}
-
-.panel-note {
-    margin: 0;
-    color: #6b7785;
-    line-height: 1.5;
-    font-size: 12px;
+    font-size: 19px;
+    font-weight: 700;
+    color: #182a3d;
 }
 
 .panel-side {
@@ -197,10 +209,10 @@ body {
 }
 
 .mini-card {
-    border: 1px solid #cfd6df;
+    border: 1px solid #d7dee7;
     border-radius: 0;
     padding: 8px 10px;
-    background: #f8fafb;
+    background: linear-gradient(180deg, #ffffff, #f6f9fc);
     min-width: 126px;
 }
 
@@ -217,11 +229,39 @@ body {
 }
 
 .button-row {
+    display: grid;
+    gap: 10px;
+    padding: 0 0 10px;
+    border-bottom: 1px solid #d9e0e7;
+}
+
+.action-groups {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.action-group {
+    border: 1px solid #d7dee7;
+    background: #f8fafc;
+    padding: 10px;
+    display: grid;
+    gap: 8px;
+}
+
+.action-group-title {
+    margin: 0;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #4f6073;
+}
+
+.action-group-row {
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
-    padding: 0 0 10px;
-    border-bottom: 1px solid #d9e0e7;
 }
 
 .action {
@@ -231,7 +271,7 @@ body {
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
-    background: linear-gradient(180deg, #ffffff, #edf1f5);
+    background: linear-gradient(180deg, #ffffff, #eef2f6);
     color: #223448;
 }
 
@@ -245,33 +285,103 @@ body {
 .action.warn { background: linear-gradient(180deg, #fff8ef, #f7e7ce); border-color: #dfbf8d; color: #8d5a14; }
 .action.stop { background: linear-gradient(180deg, #fff4f4, #f5dada); border-color: #d7aaaa; color: #9e2d2d; }
 
-.message {
-    margin: 10px 0 0;
-    min-height: 1.5em;
+.hint-action {
+    border: 1px solid #c7d3df;
+    background: #f7fafc;
+    color: #35506d;
+    padding: 4px 10px;
     font-size: 12px;
-    color: #21548c;
+    font-weight: 600;
+    cursor: pointer;
 }
 
-.validation {
-    margin: 14px 0 0;
+.msg-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(20, 29, 40, 0.28);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    z-index: 9999;
+}
+
+.msg-dialog {
+    width: min(460px, calc(100vw - 48px));
+    background: #ffffff;
+    border: 1px solid #d5dbe3;
+    box-shadow: 0 18px 50px rgba(17, 24, 39, 0.18);
+}
+
+.msg-dialog.success {
+    border-color: #b9d8c2;
+}
+
+.msg-dialog.error {
+    border-color: #e2b8b8;
+}
+
+.msg-header {
     padding: 12px 14px;
-    border-radius: 8px;
-    background: #fff7e8;
-    border: 1px solid #eed3a8;
-    color: #8a581b;
+    border-bottom: 1px solid #dde4eb;
+    font-size: 14px;
+    font-weight: 700;
+    color: #213246;
+}
+
+.msg-dialog.success .msg-header {
+    background: #f1f9f3;
+    color: #245534;
+}
+
+.msg-dialog.error .msg-header {
+    background: #fdf3f3;
+    color: #8c2f2f;
+}
+
+.msg-body {
+    padding: 14px;
+    display: grid;
+    gap: 10px;
     font-size: 13px;
+    color: #314255;
+}
+
+.msg-summary {
     line-height: 1.6;
 }
 
-.validation strong {
-    display: block;
-    margin-bottom: 6px;
+.msg-meta {
+    font-size: 12px;
+    color: #6b7785;
+}
+
+.msg-detail {
+    border: 1px solid #dde4eb;
+    background: #f8fafc;
+    padding: 10px 12px;
+    font-size: 12px;
+    color: #415063;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.msg-actions {
+    display: flex;
+    justify-content: flex-end;
+    padding: 0 14px 14px;
 }
 
 .content-stack {
     display: grid;
     gap: 10px;
     margin-top: 12px;
+}
+
+.summary-grid {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr;
+    gap: 10px;
 }
 
 .overview-grid {
@@ -281,10 +391,10 @@ body {
 }
 
 .overview-card {
-    border: 1px solid #cfd6df;
+    border: 1px solid #d7dee7;
     border-radius: 0;
     padding: 12px;
-    background: #f8fafb;
+    background: #ffffff;
     display: grid;
     gap: 6px;
 }
@@ -292,10 +402,12 @@ body {
 .overview-card label {
     color: #607082;
     font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
 }
 
 .overview-card strong {
-    font-size: 18px;
+    font-size: 20px;
     color: #24364d;
 }
 
@@ -306,7 +418,7 @@ body {
 }
 
 .section {
-    border: 1px solid #cfd6df;
+    border: 1px solid #d7dee7;
     border-radius: 0;
     padding: 12px;
     background: #ffffff;
@@ -317,6 +429,23 @@ body {
     font-size: 13px;
     font-weight: 600;
     color: #24364d;
+}
+
+.section-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    align-items: start;
+    margin-bottom: 10px;
+}
+
+.section-header .section-title {
+    margin: 0 0 4px;
+}
+
+.section-meta {
+    font-size: 11px;
+    color: #718092;
 }
 
 .grid {
@@ -386,13 +515,6 @@ body {
     color: #0d4f9c;
 }
 
-.hint {
-    margin: 0;
-    color: #6b7280;
-    font-size: 12px;
-    line-height: 1.55;
-}
-
 .logs-toolbar {
     display: flex;
     justify-content: space-between;
@@ -405,10 +527,45 @@ body {
     color: #607082;
 }
 
+.logs-controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.search-input {
+    min-width: 240px;
+}
+
+.status-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.status-box {
+    border: 1px solid #cfd6df;
+    background: #f7f9fb;
+    padding: 10px 12px;
+}
+
+.status-box label {
+    display: block;
+    font-size: 11px;
+    color: #6a7787;
+    margin-bottom: 4px;
+}
+
+.status-box strong {
+    font-size: 13px;
+    color: #213548;
+}
+
 .logs {
     min-height: 620px;
     border-radius: 0;
-    border: 1px solid #cfd6df;
+    border: 1px solid #d7dee7;
     background: #ffffff;
     color: #1f2937;
     padding: 0;
@@ -423,6 +580,11 @@ body {
     border-bottom: 1px solid #dde3ea;
     padding: 8px 10px;
     background: #ffffff;
+}
+
+.log-headless {
+    background: #edf2f7;
+    color: #33485d;
 }
 
 .log-head {
@@ -464,7 +626,7 @@ body {
 }
 
 @media (max-width: 1200px) {
-    .workspace, .panel-header {
+    .workspace, .panel-header, .summary-grid {
         grid-template-columns: 1fr;
         display: grid;
     }
@@ -476,7 +638,7 @@ body {
 }
 
 @media (max-width: 900px) {
-    .overview-grid, .grid, .log-grid, .panel-side, .toolbar {
+    .overview-grid, .grid, .log-grid, .panel-side, .toolbar, .status-strip, .action-groups {
         grid-template-columns: 1fr;
     }
 }
@@ -488,7 +650,20 @@ fn main() {
             .with_title("sock5s 控制中心")
             .with_inner_size(LogicalSize::new(1360.0, 900.0))
             .with_resizable(false),
-    );
+    )
+    .with_close_behaviour(WindowCloseBehaviour::LastWindowHides)
+    .with_custom_event_handler(|event, _| {
+        if let Event::WindowEvent {
+            event: WindowEvent::CloseRequested,
+            ..
+        } = event
+        {
+            match prompt_close_action() {
+                CloseAction::Exit => graceful_exit(),
+                CloseAction::Tray => {}
+            }
+        }
+    });
     if let Ok(icon) = build_window_icon() {
         config = config.with_icon(icon);
     }
@@ -517,7 +692,7 @@ impl UiPage {
     fn note(self) -> &'static str {
         match self {
             Self::Overview => "集中查看服务状态、配置摘要和日志概况，不再把所有配置都堆在一个长表单里。",
-            Self::Basic => "单独维护监听地址、配置文件路径、日志目录和日志保留策略。",
+            Self::Basic => "单独维护监听地址、日志目录和日志保留策略。",
             Self::Access => "单独维护代理账号、白名单或黑名单策略，以及域名转发开关。",
             Self::Logs => "单独查看最近日志、刷新状态和运行过程中的失败原因。",
         }
@@ -526,14 +701,45 @@ impl UiPage {
 
 #[component]
 fn App() -> Element {
-    let initial = ConfigForm::load_initial();
+    let initial = ConfigForm::load_initial().unwrap_or_default();
     let initial_log_dir = initial.log_dir.clone();
+    let window = use_window();
     let form = use_signal(|| initial);
+    let config_loaded_at = use_signal(now_display);
     let mut page = use_signal(|| UiPage::Overview);
     let status = use_signal(|| "未启动".to_string());
-    let message = use_signal(String::new);
+    let message = use_signal(|| None::<UiMessage>);
     let auto_refresh_logs = use_signal(|| true);
+    let log_search = use_signal(String::new);
+    let log_filter = use_signal(|| LogFilter::All);
     let mut logs = use_signal(|| read_recent_logs(Path::new(&initial_log_dir)).unwrap_or_default());
+    let tray = use_hook(init_tray_handles);
+
+    use_tray_menu_event_handler({
+        let window = window.clone();
+        let show_id = tray.show_item.id().clone();
+        let exit_id = tray.exit_item.id().clone();
+        move |event| {
+            if event.id == show_id {
+                restore_window(&window);
+            } else if event.id == exit_id {
+                graceful_exit();
+            }
+        }
+    });
+
+    use_tray_icon_event_handler({
+        let window = window.clone();
+        move |event| match event {
+            TrayIconEvent::DoubleClick { .. } => restore_window(&window),
+            TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } => restore_window(&window),
+            _ => {}
+        }
+    });
 
     use_future(move || async move {
         loop {
@@ -549,7 +755,6 @@ fn App() -> Element {
     let running = controller().lock().unwrap().is_running();
     let snapshot = form.read().clone();
     let validation_errors = snapshot.validate();
-    let has_validation_errors = !validation_errors.is_empty();
     let mode_label = match snapshot.access_mode {
         AccessMode::Blacklist => "黑名单",
         AccessMode::Whitelist => "白名单",
@@ -566,6 +771,11 @@ fn App() -> Element {
     } else {
         "自动刷新已关闭"
     };
+    let filtered_logs = filter_logs(
+        &logs.read(),
+        *log_filter.read(),
+        log_search.read().as_str(),
+    );
     let page_title = page.read().title();
     let page_note = page.read().note();
 
@@ -576,9 +786,6 @@ fn App() -> Element {
                 div { class: "toolbar",
                     div {
                         h1 { class: "toolbar-title", "sock5s 控制中心" }
-                        p { class: "toolbar-note",
-                            "桌面管理界面，按模块拆分显示。"
-                        }
                     }
                     div { class: "toolbar-status",
                         div { class: "status-chip", strong { "状态：" } "{status.read()}" }
@@ -594,6 +801,7 @@ fn App() -> Element {
                         running_label: running_label.to_string(),
                         mode_label: mode_label.to_string(),
                         domain_forwarding_label: domain_forwarding_label.to_string(),
+                        message,
                         onchange: move |next| page.set(next),
                     }
 
@@ -601,13 +809,14 @@ fn App() -> Element {
                         div { class: "panel-header",
                             div {
                                 h2 { class: "panel-title", "{page_title}" }
-                                p { class: "panel-note", "{page_note}" }
+                                HintButton {
+                                    message,
+                                    label: "模块说明",
+                                    title: format!("{page_title} 说明"),
+                                    summary: page_note.to_string(),
+                                }
                             }
                             div { class: "panel-side",
-                                div { class: "mini-card",
-                                    label { "当前配置文件" }
-                                    strong { "{snapshot.config_path}" }
-                                }
                                 div { class: "mini-card",
                                     label { "日志目录" }
                                     strong { "{snapshot.log_dir}" }
@@ -618,22 +827,12 @@ fn App() -> Element {
                         ActionBar {
                             form,
                             logs,
+                            config_loaded_at,
                             status,
                             message,
                             auto_refresh_logs,
-                            has_validation_errors,
+                            validation_errors: validation_errors.clone(),
                         }
-
-                        if has_validation_errors {
-                            div { class: "validation",
-                                strong { "配置校验未通过" }
-                                for err in validation_errors.iter() {
-                                    div { "{err}" }
-                                }
-                            }
-                        }
-
-                        p { class: "message", "{message.read()}" }
 
                         div { class: "content-stack",
                             if *page.read() == UiPage::Overview {
@@ -645,23 +844,28 @@ fn App() -> Element {
                                     domain_forwarding_label: domain_forwarding_label.to_string(),
                                     auto_refresh_label: auto_refresh_label.to_string(),
                                     log_count: logs.read().len(),
+                                    message,
                                 }
                             }
 
                             if *page.read() == UiPage::Basic {
-                                BasicSettingsPage { form, snapshot: snapshot.clone() }
+                                BasicSettingsPage { form, snapshot: snapshot.clone(), message }
                             }
 
                             if *page.read() == UiPage::Access {
-                                AccessSettingsPage { form, snapshot: snapshot.clone(), mode_label: mode_label.to_string() }
+                                AccessSettingsPage { form, snapshot: snapshot.clone(), mode_label: mode_label.to_string(), message }
                             }
 
                             if *page.read() == UiPage::Logs {
                                 LogsPage {
-                                    entries: logs.read().clone(),
+                                    entries: filtered_logs,
+                                    total_entries: logs.read().len(),
                                     running_label: running_label.to_string(),
                                     domain_forwarding_label: domain_forwarding_label.to_string(),
                                     auto_refresh_label: auto_refresh_label.to_string(),
+                                    log_search,
+                                    log_filter,
+                                    message,
                                 }
                             }
                         }
@@ -678,13 +882,19 @@ fn Sidebar(
     running_label: String,
     mode_label: String,
     domain_forwarding_label: String,
+    message: Signal<Option<UiMessage>>,
     onchange: EventHandler<UiPage>,
 ) -> Element {
     rsx! {
         aside { class: "nav",
             div {
                 h3 { class: "nav-title", "模块导航" }
-                p { class: "nav-note", "按模块切换配置页。" }
+                HintButton {
+                    message,
+                    label: "导航说明",
+                    title: "模块导航说明",
+                    summary: "按模块切换配置页。",
+                }
             }
             div { class: "nav-list",
                 NavButton {
@@ -739,111 +949,278 @@ fn NavButton(
 }
 
 #[component]
+fn HintButton(
+    message: Signal<Option<UiMessage>>,
+    label: &'static str,
+    title: String,
+    summary: String,
+    detail: Option<String>,
+) -> Element {
+    rsx! {
+        button {
+            class: "hint-action",
+            onclick: move |_| show_info_message(message, title.clone(), summary.clone(), detail.clone()),
+            "{label}"
+        }
+    }
+}
+
+#[component]
+fn MessageDialog(message: Signal<Option<UiMessage>>) -> Element {
+    let current = message.read().clone();
+    let Some(current) = current else {
+        return rsx! {};
+    };
+
+    let dialog_class = match current.kind {
+        UiMessageKind::Success => "msg-dialog success",
+        UiMessageKind::Info => "msg-dialog",
+        UiMessageKind::Error => "msg-dialog error",
+    };
+
+    rsx! {
+        div {
+            class: "msg-backdrop",
+            onclick: move |_| message.set(None),
+            div {
+                class: "{dialog_class}",
+                onclick: move |evt| evt.stop_propagation(),
+                div { class: "msg-header", "{current.title}" }
+                div { class: "msg-body",
+                    p { class: "msg-summary", "{current.summary}" }
+                    if let Some(detail) = current.detail.clone() {
+                        details {
+                            summary { class: "msg-meta", "详情" }
+                            div { class: "msg-detail", "{detail}" }
+                        }
+                    }
+                }
+                div { class: "msg-actions",
+                    button {
+                        class: if current.kind == UiMessageKind::Success { "action secondary" } else { "action stop" },
+                        onclick: move |_| message.set(None),
+                        "确定"
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
 fn ActionBar(
     form: Signal<ConfigForm>,
     logs: Signal<Vec<LogEntry>>,
+    config_loaded_at: Signal<String>,
     status: Signal<String>,
-    message: Signal<String>,
+    message: Signal<Option<UiMessage>>,
     auto_refresh_logs: Signal<bool>,
-    has_validation_errors: bool,
+    validation_errors: Vec<String>,
 ) -> Element {
+    let save_validation_errors = validation_errors.clone();
+    let export_validation_errors = validation_errors.clone();
+    let start_validation_errors = validation_errors.clone();
+
     rsx! {
         div { class: "button-row",
-            button {
-                class: "action secondary",
-                onclick: move |_| {
-                    let path = form.read().config_path.clone();
-                    match ConfigForm::load_from_path(Path::new(&path)) {
-                        Ok(next) => {
-                            let log_dir = next.log_dir.clone();
-                            form.set(next);
-                            logs.set(read_recent_logs(Path::new(&log_dir)).unwrap_or_default());
-                            let _ = save_ui_state(&UiState { config_path: path.clone() });
-                            message.set(format!("已从 {path} 重新加载配置"));
+            div { class: "action-groups",
+                div { class: "action-group",
+                    p { class: "action-group-title", "配置管理" }
+                    div { class: "action-group-row",
+                        button {
+                            class: "action secondary",
+                            onclick: move |_| {
+                                match ConfigForm::load_initial() {
+                                    Ok(next) => {
+                                        let log_dir = next.log_dir.clone();
+                                        form.set(next);
+                                        config_loaded_at.set(now_display());
+                                        logs.set(read_recent_logs(Path::new(&log_dir)).unwrap_or_default());
+                                        show_success_message(message, "配置已重新加载", format!("已从 {} 重新加载配置", DEFAULT_CONFIG_PATH));
+                                    }
+                                    Err(err) => show_error_message(message, "加载配置失败", err),
+                                }
+                            },
+                            "重新加载"
                         }
-                        Err(err) => message.set(err),
-                    }
-                },
-                "重新加载"
-            }
-            button {
-                class: "action secondary",
-                onclick: move |_| {
-                    let current = form.read().clone();
-                    match current.save() {
-                        Ok(_) => {
-                            let _ = save_ui_state(&UiState { config_path: current.config_path.clone() });
-                            message.set(format!("配置已保存到 {}", current.config_path));
+                        button {
+                            class: "action secondary",
+                            onclick: move |_| {
+                                if !save_validation_errors.is_empty() {
+                                    show_validation_message(message, &save_validation_errors);
+                                    return;
+                                }
+                                let current = form.read().clone();
+                                match current.save() {
+                                    Ok(_) => {
+                                        config_loaded_at.set(now_display());
+                                        show_success_message(message, "配置已保存", format!("配置已保存到 {}", DEFAULT_CONFIG_PATH));
+                                    }
+                                    Err(err) => show_error_message(message, "保存配置失败", err),
+                                }
+                            },
+                            "保存配置"
                         }
-                        Err(err) => message.set(err),
-                    }
-                },
-                "保存配置"
-            }
-            button {
-                class: "action secondary",
-                disabled: has_validation_errors,
-                onclick: move |_| {
-                    let current = form.read().clone();
-                    match export_config(&current) {
-                        Ok(path) => message.set(format!("已导出配置快照：{}", path.display())),
-                        Err(err) => message.set(err),
-                    }
-                },
-                "导出快照"
-            }
-            button {
-                class: "action primary",
-                disabled: has_validation_errors,
-                onclick: move |_| {
-                    let current = form.read().clone();
-                    match current.save().and_then(|_| {
-                        let mut guard = controller().lock().unwrap();
-                        guard.start(current.config_path.clone())
-                    }) {
-                        Ok(_) => {
-                            let _ = save_ui_state(&UiState { config_path: current.config_path.clone() });
-                            status.set(format!("运行中 · {}", current.listen));
-                            logs.set(read_recent_logs(Path::new(&current.log_dir)).unwrap_or_default());
-                            message.set("代理服务已启动".to_string());
+                        button {
+                            class: "action secondary",
+                            onclick: move |_| {
+                                if !export_validation_errors.is_empty() {
+                                    show_validation_message(message, &export_validation_errors);
+                                    return;
+                                }
+                                let current = form.read().clone();
+                                match export_config(&current) {
+                                    Ok(path) => show_success_message(message, "快照已导出", format!("已导出配置快照：{}", path.display())),
+                                    Err(err) => show_error_message(message, "导出快照失败", err),
+                                }
+                            },
+                            "导出快照"
                         }
-                        Err(err) => message.set(err),
                     }
-                },
-                "启动代理"
-            }
-            button {
-                class: "action stop",
-                onclick: move |_| {
-                    let log_dir = form.read().log_dir.clone();
-                    match controller().lock().unwrap().stop() {
-                        Ok(_) => {
-                            status.set("未启动".to_string());
-                            logs.set(read_recent_logs(Path::new(&log_dir)).unwrap_or_default());
-                            message.set("代理服务已停止".to_string());
+                }
+                div { class: "action-group",
+                    p { class: "action-group-title", "服务控制" }
+                    div { class: "action-group-row",
+                        button {
+                            class: "action primary",
+                            onclick: move |_| {
+                                if !start_validation_errors.is_empty() {
+                                    show_validation_message(message, &start_validation_errors);
+                                    return;
+                                }
+                                let current = form.read().clone();
+                                match current.save().and_then(|_| {
+                                    let mut guard = controller().lock().unwrap();
+                                    guard.start(DEFAULT_CONFIG_PATH.to_string())
+                                }) {
+                                    Ok(_) => {
+                                        status.set(format!("运行中 · {}", current.listen));
+                                        logs.set(read_recent_logs(Path::new(&current.log_dir)).unwrap_or_default());
+                                        show_success_message(message, "代理已启动", "代理服务已启动");
+                                    }
+                                    Err(err) => show_error_message(message, "启动代理失败", err),
+                                }
+                            },
+                            "启动代理"
                         }
-                        Err(err) => message.set(err),
+                        button {
+                            class: "action stop",
+                            onclick: move |_| {
+                                let log_dir = form.read().log_dir.clone();
+                                match controller().lock().unwrap().stop() {
+                                    Ok(_) => {
+                                        status.set("未启动".to_string());
+                                        logs.set(read_recent_logs(Path::new(&log_dir)).unwrap_or_default());
+                                        show_success_message(message, "代理已停止", "代理服务已停止");
+                                    }
+                                    Err(err) => show_error_message(message, "停止代理失败", err),
+                                }
+                            },
+                            "停止代理"
+                        }
                     }
-                },
-                "停止代理"
+                }
+                div { class: "action-group",
+                    p { class: "action-group-title", "日志运维" }
+                    div { class: "action-group-row",
+                        button {
+                            class: "action warn",
+                            onclick: move |_| {
+                                let log_dir = form.read().log_dir.clone();
+                                logs.set(read_recent_logs(Path::new(&log_dir)).unwrap_or_default());
+                                show_success_message(message, "日志已刷新", "日志已刷新");
+                            },
+                            "刷新日志"
+                        }
+                        button {
+                            class: if *auto_refresh_logs.read() { "action secondary" } else { "action warn" },
+                            onclick: move |_| {
+                                let next = !*auto_refresh_logs.read();
+                                auto_refresh_logs.set(next);
+                            },
+                            if *auto_refresh_logs.read() { "关闭自动刷新" } else { "开启自动刷新" }
+                        }
+                    }
+                }
             }
-            button {
-                class: "action warn",
-                onclick: move |_| {
-                    let log_dir = form.read().log_dir.clone();
-                    logs.set(read_recent_logs(Path::new(&log_dir)).unwrap_or_default());
-                    message.set("日志已刷新".to_string());
-                },
-                "刷新日志"
-            }
-            button {
-                class: if *auto_refresh_logs.read() { "action secondary" } else { "action warn" },
-                onclick: move |_| {
-                    let next = !*auto_refresh_logs.read();
-                    auto_refresh_logs.set(next);
-                },
-                if *auto_refresh_logs.read() { "关闭自动刷新" } else { "开启自动刷新" }
-            }
+            MessageDialog { message }
+        }
+    }
+}
+
+fn show_success_message(mut message: Signal<Option<UiMessage>>, title: impl Into<String>, summary: impl Into<String>) {
+    message.set(Some(UiMessage {
+        kind: UiMessageKind::Success,
+        title: title.into(),
+        summary: summary.into(),
+        detail: None,
+    }));
+}
+
+fn show_error_message(mut message: Signal<Option<UiMessage>>, title: impl Into<String>, detail: impl Into<String>) {
+    let detail = detail.into();
+    let summary = detail.lines().next().unwrap_or("发生错误").to_string();
+    message.set(Some(UiMessage {
+        kind: UiMessageKind::Error,
+        title: title.into(),
+        summary,
+        detail: Some(detail),
+    }));
+}
+
+fn show_validation_message(message: Signal<Option<UiMessage>>, errors: &[String]) {
+    let detail = errors.join("\n");
+    show_error_message(message, "配置校验未通过", detail);
+}
+
+fn show_info_message(
+    mut message: Signal<Option<UiMessage>>,
+    title: impl Into<String>,
+    summary: impl Into<String>,
+    detail: Option<String>,
+) {
+    message.set(Some(UiMessage {
+        kind: UiMessageKind::Info,
+        title: title.into(),
+        summary: summary.into(),
+        detail,
+    }));
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LogFilter {
+    All,
+    Access,
+    Auth,
+    Failed,
+    Policy,
+    System,
+}
+
+#[derive(Clone, PartialEq)]
+enum UiMessageKind {
+    Success,
+    Info,
+    Error,
+}
+
+#[derive(Clone, PartialEq)]
+struct UiMessage {
+    kind: UiMessageKind,
+    title: String,
+    summary: String,
+    detail: Option<String>,
+}
+
+impl LogFilter {
+    fn label(self) -> &'static str {
+        match self {
+            Self::All => "全部事件",
+            Self::Access => "访问成功",
+            Self::Auth => "认证事件",
+            Self::Failed => "连接失败",
+            Self::Policy => "策略拦截",
+            Self::System => "系统事件",
         }
     }
 }
@@ -857,6 +1234,7 @@ fn OverviewPage(
     domain_forwarding_label: String,
     auto_refresh_label: String,
     log_count: usize,
+    message: Signal<Option<UiMessage>>,
 ) -> Element {
     let user_count = snapshot
         .users_text
@@ -875,6 +1253,72 @@ fn OverviewPage(
         .count();
 
     rsx! {
+        div { class: "summary-grid",
+            div { class: "section",
+                div { class: "section-header",
+                    div {
+                        h3 { class: "section-title", "运行摘要" }
+                        HintButton {
+                            message,
+                            label: "说明",
+                            title: "运行摘要说明".to_string(),
+                            summary: "用于快速确认当前代理实例的运行状态、接入方式和访问边界。".to_string(),
+                        }
+                    }
+                    div { class: "section-meta", "面向运维与内部交付场景" }
+                }
+                    div { class: "status-strip",
+                    div { class: "status-box",
+                        label { "托盘行为" }
+                        strong { "关闭时提示后缩到托盘" }
+                    }
+                    div { class: "status-box",
+                        label { "主窗口恢复" }
+                        strong { "托盘左键或双击恢复" }
+                    }
+                    div { class: "status-box",
+                        label { "配置状态" }
+                        strong { if snapshot.validate().is_empty() { "校验通过" } else { "待修正" } }
+                    }
+                    div { class: "status-box",
+                        label { "固定配置" }
+                        strong { "{DEFAULT_CONFIG_PATH}" }
+                    }
+                }
+            }
+            div { class: "section",
+                div { class: "section-header",
+                    div {
+                        h3 { class: "section-title", "治理规则" }
+                        HintButton {
+                            message,
+                            label: "说明",
+                            title: "治理规则说明".to_string(),
+                            summary: "将认证方式、访问策略和日志采集行为集中展示，便于交付说明。".to_string(),
+                        }
+                    }
+                    div { class: "section-meta", "统一策略视图" }
+                }
+                div { class: "grid",
+                    div { class: "field",
+                        label { "认证模式" }
+                        input { class: "input", value: "{auth_label}", readonly: true }
+                    }
+                    div { class: "field",
+                        label { "访问策略" }
+                        input { class: "input", value: "{mode_label}", readonly: true }
+                    }
+                    div { class: "field",
+                        label { "域名转发" }
+                        input { class: "input", value: "{domain_forwarding_label}", readonly: true }
+                    }
+                    div { class: "field",
+                        label { "日志刷新" }
+                        input { class: "input", value: "{auto_refresh_label}", readonly: true }
+                    }
+                }
+            }
+        }
         div { class: "overview-grid",
             div { class: "overview-card",
                 label { "服务状态" }
@@ -898,13 +1342,19 @@ fn OverviewPage(
             }
         }
         div { class: "section",
-            h3 { class: "section-title", "当前配置摘要" }
-            p { class: "hint", "这里仅用于快速确认当前生效配置，详细编辑请进入左侧对应模块。" }
-            div { class: "grid",
-                div { class: "field",
-                    label { "配置文件路径" }
-                    input { class: "input", value: "{snapshot.config_path}", readonly: true }
+                div { class: "section-header",
+                    div {
+                        h3 { class: "section-title", "当前配置摘要" }
+                        HintButton {
+                            message,
+                            label: "说明",
+                            title: "当前配置摘要说明".to_string(),
+                            summary: "这里仅用于快速确认当前生效配置，详细编辑请进入左侧对应模块。".to_string(),
+                        }
                 }
+                div { class: "section-meta", "配置基线视图" }
+            }
+            div { class: "grid",
                 div { class: "field",
                     label { "日志目录" }
                     input { class: "input", value: "{snapshot.log_dir}", readonly: true }
@@ -917,28 +1367,40 @@ fn OverviewPage(
                     label { "单文件大小上限（MB）" }
                     input { class: "input", value: "{snapshot.max_file_size_mb}", readonly: true }
                 }
+                div { class: "field",
+                    label { "固定配置文件" }
+                    input { class: "input", value: "{DEFAULT_CONFIG_PATH}", readonly: true }
+                }
             }
         }
     }
 }
 
 #[component]
-fn BasicSettingsPage(form: Signal<ConfigForm>, snapshot: ConfigForm) -> Element {
+fn BasicSettingsPage(form: Signal<ConfigForm>, snapshot: ConfigForm, message: Signal<Option<UiMessage>>) -> Element {
     rsx! {
         div { class: "section",
-            h3 { class: "section-title", "基础设置" }
-            p { class: "hint", "基础参数拆到单独页面，便于集中调整监听地址、日志策略和配置文件位置。" }
-            div { class: "grid",
-                div { class: "wide",
-                    label { "配置文件路径" }
-                    input {
-                        class: "input",
-                        value: "{snapshot.config_path}",
-                        oninput: move |evt| form.with_mut(|f| f.config_path = evt.value()),
-                    }
+                div { class: "section-header",
+                    div {
+                        h3 { class: "section-title", "基础设置" }
+                        HintButton {
+                            message,
+                            label: "说明",
+                            title: "基础设置说明".to_string(),
+                            summary: "集中维护监听地址和日志策略，配置固定写入运行目录下的 config.toml。".to_string(),
+                        }
                 }
+                div { class: "section-meta", "基础参数模块" }
+            }
+            div { class: "grid",
                 div { class: "field",
                     label { "监听地址" }
+                    HintButton {
+                        message,
+                        label: "字段说明",
+                        title: "监听地址说明".to_string(),
+                        summary: "格式示例：0.0.0.0:1080".to_string(),
+                    }
                     input {
                         class: "input",
                         value: "{snapshot.listen}",
@@ -947,6 +1409,12 @@ fn BasicSettingsPage(form: Signal<ConfigForm>, snapshot: ConfigForm) -> Element 
                 }
                 div { class: "field",
                     label { "日志目录" }
+                    HintButton {
+                        message,
+                        label: "字段说明",
+                        title: "日志目录说明".to_string(),
+                        summary: "用于保存 7 天滚动日志文件。".to_string(),
+                    }
                     input {
                         class: "input",
                         value: "{snapshot.log_dir}",
@@ -955,6 +1423,12 @@ fn BasicSettingsPage(form: Signal<ConfigForm>, snapshot: ConfigForm) -> Element 
                 }
                 div { class: "field",
                     label { "日志保留天数" }
+                    HintButton {
+                        message,
+                        label: "字段说明",
+                        title: "日志保留天数说明".to_string(),
+                        summary: "建议与企业内网审计周期保持一致。".to_string(),
+                    }
                     input {
                         class: "input",
                         value: "{snapshot.retention_days}",
@@ -963,11 +1437,27 @@ fn BasicSettingsPage(form: Signal<ConfigForm>, snapshot: ConfigForm) -> Element 
                 }
                 div { class: "field",
                     label { "单文件大小上限（MB）" }
+                    HintButton {
+                        message,
+                        label: "字段说明",
+                        title: "单文件大小上限说明".to_string(),
+                        summary: "超过上限时自动切分新日志文件。".to_string(),
+                    }
                     input {
                         class: "input",
                         value: "{snapshot.max_file_size_mb}",
                         oninput: move |evt| form.with_mut(|f| f.max_file_size_mb = evt.value()),
                     }
+                }
+                div { class: "field",
+                    label { "固定配置文件" }
+                    HintButton {
+                        message,
+                        label: "字段说明",
+                        title: "固定配置文件说明".to_string(),
+                        summary: "启动目录下不存在时会自动生成默认 config.toml。".to_string(),
+                    }
+                    input { class: "input", value: "{DEFAULT_CONFIG_PATH}", readonly: true }
                 }
             }
         }
@@ -975,16 +1465,37 @@ fn BasicSettingsPage(form: Signal<ConfigForm>, snapshot: ConfigForm) -> Element 
 }
 
 #[component]
-fn AccessSettingsPage(form: Signal<ConfigForm>, snapshot: ConfigForm, mode_label: String) -> Element {
+fn AccessSettingsPage(
+    form: Signal<ConfigForm>,
+    snapshot: ConfigForm,
+    mode_label: String,
+    message: Signal<Option<UiMessage>>,
+) -> Element {
     let domain_toggle_label = if snapshot.allow_domains { "已开启" } else { "已关闭" };
 
     rsx! {
         div { class: "section",
-            h3 { class: "section-title", "账号与访问控制" }
-            p { class: "hint", "账号、白名单或黑名单、域名转发策略拆成独立页面，避免和日志设置混在一起。" }
+            div { class: "section-header",
+                div {
+                    h3 { class: "section-title", "账号与访问控制" }
+                    HintButton {
+                        message,
+                        label: "说明",
+                        title: "访问控制说明".to_string(),
+                        summary: "将认证、目标访问边界和域名转发策略统一收口，适合内部治理场景。".to_string(),
+                    }
+                }
+                div { class: "section-meta", "访问治理模块" }
+            }
             div { class: "grid",
                 div { class: "wide",
                     label { "代理账号（每行一个，格式：用户名=密码）" }
+                    HintButton {
+                        message,
+                        label: "字段说明",
+                        title: "代理账号说明".to_string(),
+                        summary: "留空表示无认证；填写后启用用户名密码认证。".to_string(),
+                    }
                     textarea {
                         class: "textarea",
                         value: "{snapshot.users_text}",
@@ -993,6 +1504,12 @@ fn AccessSettingsPage(form: Signal<ConfigForm>, snapshot: ConfigForm, mode_label
                 }
                 div { class: "field",
                     label { "访问策略" }
+                    HintButton {
+                        message,
+                        label: "字段说明",
+                        title: "访问策略说明".to_string(),
+                        summary: "黑名单表示禁止命中；白名单表示仅允许命中。".to_string(),
+                    }
                     div { class: "toggle-row",
                         button {
                             class: if snapshot.access_mode == AccessMode::Blacklist { "toggle active" } else { "toggle" },
@@ -1008,6 +1525,12 @@ fn AccessSettingsPage(form: Signal<ConfigForm>, snapshot: ConfigForm, mode_label
                 }
                 div { class: "field",
                     label { "域名转发" }
+                    HintButton {
+                        message,
+                        label: "字段说明",
+                        title: "域名转发说明".to_string(),
+                        summary: "关闭后仅允许目标为 IP，适合更强约束场景。".to_string(),
+                    }
                     div { class: "toggle-row",
                         button {
                             class: if snapshot.allow_domains { "toggle active" } else { "toggle" },
@@ -1030,6 +1553,12 @@ fn AccessSettingsPage(form: Signal<ConfigForm>, snapshot: ConfigForm, mode_label
                 }
                 div { class: "wide",
                     label { "目标 IP 列表（每行一个）" }
+                    HintButton {
+                        message,
+                        label: "字段说明",
+                        title: "目标 IP 列表说明".to_string(),
+                        summary: "用于精确控制可达目标地址。".to_string(),
+                    }
                     textarea {
                         class: "textarea",
                         value: "{snapshot.ips_text}",
@@ -1038,6 +1567,12 @@ fn AccessSettingsPage(form: Signal<ConfigForm>, snapshot: ConfigForm, mode_label
                 }
                 div { class: "wide",
                     label { "目标网段 CIDR（每行一个）" }
+                    HintButton {
+                        message,
+                        label: "字段说明",
+                        title: "目标网段说明".to_string(),
+                        summary: "用于按网段统一控制访问边界。".to_string(),
+                    }
                     textarea {
                         class: "textarea",
                         value: "{snapshot.cidrs_text}",
@@ -1052,15 +1587,50 @@ fn AccessSettingsPage(form: Signal<ConfigForm>, snapshot: ConfigForm, mode_label
 #[component]
 fn LogsPage(
     entries: Vec<LogEntry>,
+    total_entries: usize,
     running_label: String,
     domain_forwarding_label: String,
     auto_refresh_label: String,
+    log_search: Signal<String>,
+    log_filter: Signal<LogFilter>,
+    message: Signal<Option<UiMessage>>,
 ) -> Element {
     rsx! {
         div { class: "section",
             div { class: "logs-toolbar",
-                p { class: "hint", "这里只展示最近日志，重点用于排查认证失败、访问拦截、目标连接失败和会话关闭。" }
-                div { class: "logs-meta", "服务：{running_label} ｜ 域名转发：{domain_forwarding_label} ｜ {auto_refresh_label}" }
+                div {
+                    HintButton {
+                        message,
+                        label: "日志说明",
+                        title: "日志页说明".to_string(),
+                        summary: "这里展示最近日志，用于定位认证失败、访问拦截、目标连接失败和会话关闭。".to_string(),
+                    }
+                    div { class: "logs-meta", "服务：{running_label} ｜ 域名转发：{domain_forwarding_label} ｜ {auto_refresh_label}" }
+                }
+                div { class: "logs-controls",
+                    input {
+                        class: "input search-input",
+                        placeholder: "搜索用户、客户端、目标、原因",
+                        value: "{log_search.read()}",
+                        oninput: move |evt| log_search.set(evt.value()),
+                    }
+                    div { class: "toggle-row",
+                        for filter in [
+                            LogFilter::All,
+                            LogFilter::Access,
+                            LogFilter::Auth,
+                            LogFilter::Failed,
+                            LogFilter::Policy,
+                            LogFilter::System,
+                        ] {
+                            button {
+                                class: if *log_filter.read() == filter { "toggle active" } else { "toggle" },
+                                onclick: move |_| log_filter.set(filter),
+                                "{filter.label()}"
+                            }
+                        }
+                    }
+                }
             }
         }
         div { class: "logs",
@@ -1068,7 +1638,7 @@ fn LogsPage(
                 div { class: "log-empty", "当前没有可显示的日志内容。" }
             } else {
                 div { class: "log-list",
-                    div { class: "log-item", style: "background:#f3f6f9; font-weight:600;",
+                    div { class: "log-item log-headless", style: "font-weight:600;",
                         div { class: "log-grid",
                             div { "时间 / 类型" }
                             div { "用户 / 客户端" }
@@ -1076,6 +1646,9 @@ fn LogsPage(
                             div { "目标" }
                             div { "原因" }
                         }
+                    }
+                    div { class: "log-item log-headless", style: "font-size:11px;",
+                        "显示 {entries.len()} / {total_entries} 条日志"
                     }
                     for entry in entries.iter() {
                         div { class: "log-item",
@@ -1100,7 +1673,6 @@ fn LogsPage(
 
 #[derive(Clone, PartialEq)]
 struct ConfigForm {
-    config_path: String,
     listen: String,
     users_text: String,
     access_mode: AccessMode,
@@ -1110,11 +1682,6 @@ struct ConfigForm {
     log_dir: String,
     retention_days: String,
     max_file_size_mb: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct UiState {
-    config_path: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -1141,7 +1708,6 @@ impl LogEntry {
 impl Default for ConfigForm {
     fn default() -> Self {
         Self {
-            config_path: "config.toml".to_string(),
             listen: "127.0.0.1:1080".to_string(),
             users_text: String::new(),
             access_mode: AccessMode::Blacklist,
@@ -1156,37 +1722,14 @@ impl Default for ConfigForm {
 }
 
 impl ConfigForm {
-    fn load_initial() -> Self {
-        let config_path = load_ui_state()
-            .map(|state| PathBuf::from(state.config_path))
-            .filter(|path| path.exists())
-            .unwrap_or_else(|| PathBuf::from("config.toml"));
-        if config_path.exists() {
-            return Self::load_from_path(&config_path).unwrap_or_default();
-        }
-
-        let example_path = PathBuf::from("config.toml.example");
-        if example_path.exists() {
-            return Self::load_from_path(&example_path)
-                .map(|mut form| {
-                    form.config_path = "config.toml".to_string();
-                    form
-                })
-                .unwrap_or_default();
-        }
-
-        Self::default()
+    fn load_initial() -> std::result::Result<Self, String> {
+        let config =
+            AppConfig::ensure_runtime_file(DEFAULT_CONFIG_PATH).map_err(|err| err.to_string())?;
+        Ok(Self::from_config(config))
     }
 
-    fn load_from_path(path: &Path) -> std::result::Result<Self, String> {
-        let path_str = path.to_string_lossy().to_string();
-        let config = AppConfig::from_file(&path_str).map_err(|err| err.to_string())?;
-        Ok(Self::from_config(path_str, config))
-    }
-
-    fn from_config(config_path: String, config: AppConfig) -> Self {
+    fn from_config(config: AppConfig) -> Self {
         Self {
-            config_path,
             listen: config.listen.to_string(),
             users_text: config
                 .auth
@@ -1220,7 +1763,7 @@ impl ConfigForm {
     fn save(&self) -> std::result::Result<(), String> {
         let config = self.to_config()?;
         config
-            .save_to_file(&self.config_path)
+            .save_to_file(DEFAULT_CONFIG_PATH)
             .map_err(|err| format!("保存配置失败：{err}"))
     }
 
@@ -1314,39 +1857,7 @@ fn export_config(form: &ConfigForm) -> std::result::Result<PathBuf, String> {
 }
 
 fn build_window_icon() -> std::result::Result<Icon, String> {
-    let width = 64;
-    let height = 64;
-    let mut rgba = Vec::with_capacity(width * height * 4);
-
-    for y in 0..height {
-        for x in 0..width {
-            let dx = x as f32 - 32.0;
-            let dy = y as f32 - 32.0;
-            let distance = (dx * dx + dy * dy).sqrt();
-            let (r, g, b, a) = if distance < 28.0 {
-                let top_mix = (y as f32 / height as f32).clamp(0.0, 1.0);
-                let r = (15.0 + 12.0 * top_mix) as u8;
-                let g = (106.0 + 40.0 * top_mix) as u8;
-                let b = (216.0 - 48.0 * top_mix) as u8;
-                (r, g, b, 255)
-            } else {
-                (0, 0, 0, 0)
-            };
-
-            let ring = distance > 14.0 && distance < 17.0;
-            let accent = x > 21 && x < 43 && y > 28 && y < 34;
-            let node = (x > 18 && x < 26 && y > 18 && y < 26)
-                || (x > 38 && x < 46 && y > 18 && y < 26)
-                || (x > 28 && x < 36 && y > 38 && y < 46);
-
-            if ring || accent || node {
-                rgba.extend_from_slice(&[244, 248, 255, 255]);
-            } else {
-                rgba.extend_from_slice(&[r, g, b, a]);
-            }
-        }
-    }
-
+    let (rgba, width, height) = build_app_icon_rgba();
     Icon::from_rgba(rgba, width as u32, height as u32)
         .map_err(|err| format!("创建窗口图标失败：{err}"))
 }
@@ -1468,17 +1979,6 @@ where
     Ok(values)
 }
 
-fn load_ui_state() -> Option<UiState> {
-    let path = PathBuf::from("ui-state.toml");
-    let content = fs::read_to_string(path).ok()?;
-    toml::from_str(&content).ok()
-}
-
-fn save_ui_state(state: &UiState) -> std::result::Result<(), String> {
-    let content = toml::to_string_pretty(state).map_err(|err| format!("保存界面状态失败：{err}"))?;
-    fs::write("ui-state.toml", content).map_err(|err| format!("写入界面状态失败：{err}"))
-}
-
 fn read_recent_logs(dir: &Path) -> std::result::Result<Vec<LogEntry>, String> {
     if !dir.exists() {
         return Ok(Vec::new());
@@ -1538,4 +2038,181 @@ fn parse_log_line(line: &str) -> Option<LogEntry> {
     }
 
     Some(entry)
+}
+
+fn now_display() -> String {
+    Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+fn filter_logs(entries: &[LogEntry], filter: LogFilter, keyword: &str) -> Vec<LogEntry> {
+    let keyword = keyword.trim().to_ascii_lowercase();
+
+    entries
+        .iter()
+        .filter(|entry| matches_filter(entry, filter))
+        .filter(|entry| {
+            if keyword.is_empty() {
+                return true;
+            }
+
+            let haystack = format!(
+                "{} {} {} {} {} {}",
+                entry.timestamp, entry.kind, entry.user, entry.client_ip, entry.client_addr, entry.target
+            )
+            .to_ascii_lowercase();
+            let reason = entry.reason.to_ascii_lowercase();
+
+            haystack.contains(&keyword) || reason.contains(&keyword)
+        })
+        .cloned()
+        .collect()
+}
+
+fn matches_filter(entry: &LogEntry, filter: LogFilter) -> bool {
+    match filter {
+        LogFilter::All => true,
+        LogFilter::Access => entry.kind.starts_with("访问/"),
+        LogFilter::Auth => entry.kind == "auth_succeeded" || entry.kind == "auth_failed",
+        LogFilter::Failed => entry.kind == "connect_failed" || entry.kind == "session_error",
+        LogFilter::Policy => entry.kind == "access_denied",
+        LogFilter::System => entry.kind == "server_started"
+            || entry.kind == "server_stopped"
+            || entry.kind == "connection_closed",
+    }
+}
+
+#[derive(Clone)]
+struct TrayHandles {
+    _tray: trayicon::TrayIcon,
+    show_item: MenuItem,
+    exit_item: MenuItem,
+}
+
+impl TrayHandles {
+    fn new() -> Self {
+        let menu = Menu::new();
+        let show_item = MenuItem::new("显示主窗口", true, None);
+        let exit_item = MenuItem::new("退出程序", true, None);
+        let _ = menu.append(&show_item);
+        let _ = menu.append(&exit_item);
+
+        let icon = build_tray_icon().ok();
+        let tray = trayicon::init_tray_icon(menu, icon);
+
+        Self {
+            _tray: tray,
+            show_item,
+            exit_item,
+        }
+    }
+}
+
+fn init_tray_handles() -> TrayHandles {
+    TrayHandles::new()
+}
+
+fn restore_window(window: &dioxus_desktop::DesktopContext) {
+    window.set_minimized(false);
+    window.set_visible(true);
+    window.set_focus();
+}
+
+fn graceful_exit() -> ! {
+    let _ = controller().lock().unwrap().stop();
+    std::process::exit(0);
+}
+
+#[derive(Clone, Copy)]
+enum CloseAction {
+    Exit,
+    Tray,
+}
+
+#[cfg(target_os = "windows")]
+fn prompt_close_action() -> CloseAction {
+    use std::ffi::c_void;
+
+    const MB_ICONQUESTION: u32 = 0x0000_0020;
+    const MB_YESNO: u32 = 0x0000_0004;
+    const MB_DEFBUTTON2: u32 = 0x0000_0100;
+    const IDYES: i32 = 6;
+
+    unsafe extern "system" {
+        fn MessageBoxW(
+            hwnd: *mut c_void,
+            lp_text: *const u16,
+            lp_caption: *const u16,
+            u_type: u32,
+        ) -> i32;
+    }
+
+    let text = wide("是否退出程序？\n\n选择“是”立即退出。\n选择“否”缩到托盘，程序继续后台运行。");
+    let caption = wide("sock5s 控制中心");
+    let result = unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            caption.as_ptr(),
+            MB_ICONQUESTION | MB_YESNO | MB_DEFBUTTON2,
+        )
+    };
+
+    if result == IDYES {
+        CloseAction::Exit
+    } else {
+        CloseAction::Tray
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn prompt_close_action() -> CloseAction {
+    CloseAction::Tray
+}
+
+#[cfg(target_os = "windows")]
+fn wide(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+fn build_tray_icon() -> std::result::Result<trayicon::Icon, String> {
+    let (rgba, width, height) = build_app_icon_rgba();
+    trayicon::Icon::from_rgba(rgba, width, height)
+        .map_err(|err| format!("创建托盘图标失败：{err}"))
+}
+
+fn build_app_icon_rgba() -> (Vec<u8>, u32, u32) {
+    let width = 64usize;
+    let height = 64usize;
+    let mut rgba = Vec::with_capacity(width * height * 4);
+
+    for y in 0..height {
+        for x in 0..width {
+            let dx = x as f32 - 32.0;
+            let dy = y as f32 - 32.0;
+            let distance = (dx * dx + dy * dy).sqrt();
+            let (r, g, b, a) = if distance < 28.0 {
+                let top_mix = (y as f32 / height as f32).clamp(0.0, 1.0);
+                let r = (15.0 + 12.0 * top_mix) as u8;
+                let g = (106.0 + 40.0 * top_mix) as u8;
+                let b = (216.0 - 48.0 * top_mix) as u8;
+                (r, g, b, 255)
+            } else {
+                (0, 0, 0, 0)
+            };
+
+            let ring = distance > 14.0 && distance < 17.0;
+            let accent = x > 21 && x < 43 && y > 28 && y < 34;
+            let node = (x > 18 && x < 26 && y > 18 && y < 26)
+                || (x > 38 && x < 46 && y > 18 && y < 26)
+                || (x > 28 && x < 36 && y > 38 && y < 46);
+
+            if ring || accent || node {
+                rgba.extend_from_slice(&[244, 248, 255, 255]);
+            } else {
+                rgba.extend_from_slice(&[r, g, b, a]);
+            }
+        }
+    }
+
+    (rgba, width as u32, height as u32)
 }

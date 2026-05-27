@@ -6,6 +6,8 @@ use std::path::PathBuf;
 
 use crate::error::Result;
 
+pub const DEFAULT_CONFIG_PATH: &str = "config.toml";
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppConfig {
     pub listen: SocketAddr,
@@ -91,6 +93,17 @@ impl AppConfig {
         Ok(config)
     }
 
+    pub fn ensure_runtime_file(path: &str) -> Result<Self> {
+        let config_path = PathBuf::from(path);
+        if config_path.exists() {
+            return Self::from_file(path);
+        }
+
+        let config = Self::default();
+        config.save_to_file(path)?;
+        Ok(config)
+    }
+
     pub fn save_to_file(&self, path: &str) -> Result<()> {
         let content = toml::to_string_pretty(self)?;
         std::fs::write(path, content)?;
@@ -157,6 +170,17 @@ impl Default for LogConfig {
             dir: default_log_dir(),
             retention_days: default_retention_days(),
             max_file_size_mb: default_max_file_size_mb(),
+        }
+    }
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            listen: "127.0.0.1:1080".parse().expect("valid default listen address"),
+            auth: AuthConfig::default(),
+            access: AccessConfig::default(),
+            log: LogConfig::default(),
         }
     }
 }
